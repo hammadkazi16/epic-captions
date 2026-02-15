@@ -16,3 +16,7 @@ input[type="color"]::-moz-color-swatch {
     border-radius: 5px;
     border: 2px solid black;
 }
+
+nextjs-portal {
+  display: none !important;
+}
