@@ -61,7 +61,8 @@ export default function FilePage({params}) {
           
           <ResultVideo
             filename={filename}
-            transcriptionItems={awsTranscriptionItems} />
+            transcriptionItems={awsTranscriptionItems}
+            setAwsTranscriptionItems={setAwsTranscriptionItems} />
         </div>
       </div>
     </div>

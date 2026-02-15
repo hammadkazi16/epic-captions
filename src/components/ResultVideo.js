@@ -7,10 +7,11 @@ import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
 import { translateText } from "@/app/actions/translate";
 
-import roboto from './../fonts/Roboto-Regular.ttf';
-import robotoBold from './../fonts/Roboto-Bold.ttf';
+import notoSansDevanagari from './../fonts/DM_Serif_Display,Noto_Sans_Devanagari/Noto_Sans_Devanagari/static/NotoSansDevanagari-Regular.ttf';
+import notoSansGujarati from './../fonts/Noto_Sans_Gujarati/NotoSansGujarati-VariableFont_wdth,wght.ttf';
+import notoSansTamil from './../fonts/Noto_Sans_Tamil/static/NotoSansTamil-Regular.ttf';
 
-export default function ResultVideo({ filename, transcriptionItems, isButtonsOnly, isVideoOnly }) {
+export default function ResultVideo({ filename, transcriptionItems, isButtonsOnly, isVideoOnly, setAwsTranscriptionItems }) {
   const videoUrl =
     "https://hammad-captions.s3.ap-south-1.amazonaws.com/" + filename;
 
@@ -36,6 +37,13 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
     load();
   }, []);
 
+  // Sync items back to parent after translations
+  useEffect(() => {
+    if (setAwsTranscriptionItems) {
+      setAwsTranscriptionItems(items);
+    }
+  }, [items, setAwsTranscriptionItems]);
+
   const load = async () => {
     const ffmpeg = ffmpegRef.current;
     const baseURL =
@@ -54,14 +62,26 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
       });
     }
 
-    await ffmpeg.writeFile("/tmp/roboto.ttf", await fetchFile(roboto));
-    await ffmpeg.writeFile(
-      "/tmp/roboto-bold.ttf",
-      await fetchFile(robotoBold)
-    );
+    // Load all language fonts
+    await ffmpeg.writeFile("/tmp/NotoSansDevanagari-Regular.ttf", await fetchFile(notoSansDevanagari));
+    await ffmpeg.writeFile("/tmp/NotoSansGujarati.ttf", await fetchFile(notoSansGujarati));
+    await ffmpeg.writeFile("/tmp/NotoSansTamil.ttf", await fetchFile(notoSansTamil));
 
     setLoaded(true);
   };
+
+  function getFontPathAndName(language) {
+    const fontMap = {
+      hi: { path: notoSansDevanagari, name: 'Noto Sans Devanagari' },
+      mr: { path: notoSansDevanagari, name: 'Noto Sans Devanagari' },
+      hinglish: { path: notoSansDevanagari, name: 'Noto Sans Devanagari' },
+      gu: { path: notoSansGujarati, name: 'Noto Sans Gujarati' },
+      ta: { path: notoSansTamil, name: 'Noto Sans Tamil' },
+      tamil: { path: notoSansTamil, name: 'Noto Sans Tamil' },
+      en: { path: notoSansDevanagari, name: 'Noto Sans Devanagari' },
+    };
+    return fontMap[language] || fontMap['en'];
+  }
 
   function toFFmpegColor(rgb) {
     const bgr =
@@ -71,8 +91,8 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
 
   const transcode = async () => {
     const ffmpeg = ffmpegRef.current;
-   const srt = transcriptionItemsToSrt(items);
-
+    const srt = transcriptionItemsToSrt(items);
+    const { name: fontName } = getFontPathAndName(selectedLanguage);
 
     await ffmpeg.writeFile(filename, await fetchFile(videoUrl));
     await ffmpeg.writeFile("subs.srt", srt);
@@ -100,7 +120,7 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
       "-preset",
       "ultrafast",
       "-vf",
-      `subtitles=subs.srt:fontsdir=/tmp:force_style='Fontname=Roboto Bold,FontSize=${fontSize},MarginV=70,BorderStyle=2,Outline=2,Shadow=0,PrimaryColour=${toFFmpegColor(
+      `subtitles=subs.srt:fontsdir=/tmp:force_style='Fontname=${fontName},FontSize=${fontSize},MarginV=70,BorderStyle=2,Outline=2,Shadow=1,Bold=1,PrimaryColour=${toFFmpegColor(
         primaryColor
       )},OutlineColour=${toFFmpegColor(outlineColor)}'`,
       "output.mp4",
@@ -130,27 +150,76 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
   };
 
  const translateTranscription = async () => {
-    try {
-      const { GoogleGenerativeAI } = await import("@google/generative-ai");
-      const genAI = new GoogleGenerativeAI(process.env.NEXT_PUBLIC_GOOGLE_API_KEY);
-      const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-      const prompt = transcriptionItems
-        .map(item => item.content)
-        .join(" ") || "";
-      const prompt2 = `Translate the following text to ${selectedLanguage}: ${prompt} `;
-      const promt3='Translate the following transcription and return only the translated text, without any additional commentary or metadata:'
-      const prompt4=promt3+prompt2+prompt;
-      const result = await model.generateContent(prompt4);
-      const translatedText = result.response.text();
-      const translatedItems = transcriptionItems.map((item, index) => ({
-        ...item,
-        content: translatedText.split(" ")[index] || item.content
-      }));
-      setTranscriptionItems(translatedItems);
-    } catch (error) {
-      console.error("Error translating transcription via Google AI:", error);
-    }
-  };
+  try {
+    setIsTranslating(true);
+
+    if (!items || items.length === 0) return;
+
+    const indices = [];
+    const textLines = [];
+
+    items.forEach((item, index) => {
+      if (item && item.content) {
+        indices.push(index);
+        textLines.push(item.content);
+      }
+    });
+
+    const fullText = textLines.join("\n");
+
+    const response = await fetch(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${process.env.NEXT_PUBLIC_OPENROUTER_API_KEY}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model: "openrouter/free",
+          messages: [
+            {
+              role: "system",
+              content:
+                "Translate each line separately and return EXACTLY the same number of lines separated by newline. No commentary."
+            },
+            {
+              role: "user",
+              content: `Translate to ${selectedLanguage}:\n\n${fullText}`
+            }
+          ]
+        })
+      }
+    );
+
+    const data = await response.json();
+
+    const translatedText =
+      data?.choices?.[0]?.message?.content?.trim() || "";
+
+    const translatedLines = translatedText.split("\n");
+
+    const updatedItems = [...items];
+
+    indices.forEach((originalIndex, i) => {
+      updatedItems[originalIndex] = {
+        ...updatedItems[originalIndex],
+        content:
+          translatedLines[i] ||
+          updatedItems[originalIndex].content
+      };
+    });
+
+    setItems(updatedItems);
+
+  } catch (error) {
+    console.error("Translation error:", error);
+  } finally {
+    setIsTranslating(false);
+  }
+};
+
+
 
 
   return (
@@ -194,9 +263,15 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
               <button
                 onClick={translateTranscription}
                 disabled={isTranslating}
-                className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-50 py-3 px-4 rounded-lg font-semibold border border-amber-400/30 transition-all"
+                className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-50 py-3 px-4 rounded-lg font-semibold border border-amber-400/30 transition-all inline-flex gap-2 items-center justify-center"
               >
-                {isTranslating ? "Translating..." : "Translate Captions"}
+                {isTranslating && (
+                  <svg className="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                )}
+                <span>{isTranslating ? "Translating..." : "Translate Captions"}</span>
               </button>
 
               <button id="download"
@@ -220,6 +295,7 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
                 <option value="gu">Gujarati</option>
                 <option value="en">English</option>
                 <option value="hinglish">Hinglish</option>
+                <option value="tamil">Tamil</option>
               </select>
             </div>
 
@@ -283,9 +359,15 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
                 <button
                   onClick={translateTranscription}
                   disabled={isTranslating}
-                  className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-50 py-3 px-4 rounded-lg font-semibold border border-amber-400/30 transition-all"
+                  className="w-full bg-gradient-to-r from-amber-600 to-orange-600 hover:from-amber-500 hover:to-orange-500 disabled:opacity-50 py-3 px-4 rounded-lg font-semibold border border-amber-400/30 transition-all inline-flex gap-2 items-center justify-center"
                 >
-                  {isTranslating ? "Translating..." : "Translate Captions"}
+                  {isTranslating && (
+                    <svg className="w-5 h-5 animate-spin" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                    </svg>
+                  )}
+                  <span>{isTranslating ? "Translating..." : "Translate Captions"}</span>
                 </button>
 
                 <button
@@ -304,11 +386,12 @@ export default function ResultVideo({ filename, transcriptionItems, isButtonsOnl
                   onChange={(e) => setSelectedLanguage(e.target.value)}
                   className="w-full border border-slate-500 rounded-lg p-3 text-slate-900 bg-slate-100 font-medium"
                 >
+                  <option value="en">English</option>
                   <option value="hi">Hindi</option>
                   <option value="mr">Marathi</option>
                   <option value="gu">Gujarati</option>
-                  <option value="en">English</option>
                   <option value="hinglish">Hinglish</option>
+                  <option value="tamil">Tamil</option>
                 </select>
               </div>
 
